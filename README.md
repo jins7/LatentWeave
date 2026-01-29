@@ -1,14 +1,11 @@
 # LatentWeave Workflow
 
----
 
 ## 1. Install
 
 ```bash
 pip install -r requirements.txt
 ```
-
----
 
 ## 2. Step 1: Run main.py (optimize & save data)
 
@@ -21,7 +18,6 @@ python main.py \
   --end_idx 300
 ```
 
----
 
 ## 3. Step 2: Train \<WEAVE\> tokens & WEAVEGen
 
@@ -33,8 +29,6 @@ python train_weave_anchors.py \
   --epochs 3 \
   --batch_size 2
 ```
-
----
 
 ## 4. Step 3: Evaluate WEAVEGen
 

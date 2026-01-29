@@ -1,13 +1,15 @@
 # LatentWeave Workflow
 
+## 🚀 Quick Start
 
-## 1. Install
-
-```bash
+### Setup and Dependencies
+```
+conda create -n LatentWeave python=3.10
+conda activate LatentWeave
 pip install -r requirements.txt
 ```
 
-## 2. Step 1: Run main.py (optimize & save data)
+### 1. Step 1: Run main.py (optimize & save data)
 
 ```bash
 python main.py \
@@ -19,7 +21,7 @@ python main.py \
 ```
 
 
-## 3. Step 2: Train \<WEAVE\> tokens & WEAVEGen
+### 2. Step 2: Train \<WEAVE\> tokens & WEAVEGen
 
 ```bash
 python train_weave_anchors.py \
@@ -30,7 +32,7 @@ python train_weave_anchors.py \
   --batch_size 2
 ```
 
-## 4. Step 3: Evaluate WEAVEGen
+### 3. Step 3: Evaluate WEAVEGen
 
 ```bash
 python eval_weave.py \
@@ -40,3 +42,7 @@ python eval_weave.py \
   --start_idx 0 \
   --end_idx 300
 ```
+
+## ✨ Acknowledgement
+- Thanks to [Qwen](https://github.com/QwenLM/Qwen3-VL) for standard evaluation.
+

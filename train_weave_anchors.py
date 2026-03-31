@@ -12,7 +12,6 @@ from PIL import Image
 from tqdm import tqdm
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from utils import mask_path
 
 WEAVE_TOKEN_NAMES = ["<WEAVE_1>", "<WEAVE_2>", "<WEAVE_3>"]
 DEFAULT_NUM_WEAVE = 3
@@ -95,6 +94,39 @@ def parse_args():
         default=42,
         help="Random seed",
     )
+    parser.add_argument(
+        "--full_finetune",
+        action="store_true",
+        help="Train all parameters (default: LoRA + trainable token embeddings)",
+    )
+    parser.add_argument(
+        "--lora_r",
+        type=int,
+        default=16,
+        help="LoRA rank (default 16)",
+    )
+    parser.add_argument(
+        "--lora_alpha",
+        type=int,
+        default=32,
+        help="LoRA alpha (default 32)",
+    )
+    parser.add_argument(
+        "--lora_dropout",
+        type=float,
+        default=0.05,
+        help="LoRA dropout (default 0.05)",
+    )
+    parser.add_argument(
+        "--lora_on_vision",
+        action="store_true",
+        help="Apply LoRA to vision tower Linear layers as well (default: language-only)",
+    )
+    parser.add_argument(
+        "--merge_lora_before_save",
+        action="store_true",
+        help="Merge LoRA into base and save one full checkpoint (no separate adapter)",
+    )
     args = parser.parse_args()
     if not args.model_path:
         args.model_path = os.environ.get("MODEL_PATH", "").strip() or None
@@ -174,7 +206,9 @@ class WeaveUtilDataset(Dataset):
             optimized_answer = item.get("ground_truth", "")
 
         image = decode_image_from_base64(image_b64)
+
         prompt_with_weave = prompt + "\n\n" + self.weave_steps_suffix + "\n\n"
+
         messages = [
             {
                 "role": "user",
@@ -191,6 +225,7 @@ class WeaveUtilDataset(Dataset):
             )
         except Exception:
             text = prompt_with_weave + optimized_answer
+
         try:
             inputs = self.processor(
                 text=[text],
@@ -223,6 +258,7 @@ class WeaveUtilDataset(Dataset):
             attention_mask = (input_ids != pad_id).long()
             if attention_mask.sum() == 0:
                 attention_mask = torch.ones_like(input_ids)
+
         answer_ids = self.tokenizer(
             optimized_answer,
             add_special_tokens=False,
@@ -256,13 +292,89 @@ def add_weave_tokens_to_tokenizer(tokenizer, num_weave: int) -> List[str]:
     return to_add
 
 
+def _module_name_for_submodule(root: torch.nn.Module, target: torch.nn.Module) -> Optional[str]:
+    for name, mod in root.named_modules():
+        if mod is target:
+            return name
+    return None
+
+
+def collect_lora_target_suffixes(model: torch.nn.Module, include_vision: bool) -> List[str]:
+    allowed = {
+        "q_proj",
+        "k_proj",
+        "v_proj",
+        "o_proj",
+        "gate_proj",
+        "up_proj",
+        "down_proj",
+    }
+    found: set = set()
+    for name, mod in model.named_modules():
+        if not isinstance(mod, torch.nn.Linear):
+            continue
+        short = name.rsplit(".", 1)[-1]
+        if short not in allowed:
+            continue
+        if not include_vision:
+            low = name.lower()
+            if "visual" in low or "vision_tower" in low:
+                continue
+        found.add(short)
+    if not found:
+        return sorted(allowed)
+    return sorted(found)
+
+
+def build_modules_to_save(model: torch.nn.Module) -> List[str]:
+    names: List[str] = []
+    emb = model.get_input_embeddings()
+    emb_name = _module_name_for_submodule(model, emb)
+    if emb_name:
+        names.append(emb_name)
+    tied = getattr(model.config, "tie_word_embeddings", True)
+    if not tied and hasattr(model, "lm_head"):
+        head_name = _module_name_for_submodule(model, model.lm_head)
+        if head_name:
+            names.append(head_name)
+    return names or ["model.embed_tokens"]
+
+
+def apply_lora_weavegen(model: torch.nn.Module, args: argparse.Namespace) -> torch.nn.Module:
+    try:
+        from peft import LoraConfig, TaskType, get_peft_model
+    except ImportError as e:
+        raise ImportError(
+            "LoRA 训练需要安装 peft：pip install peft>=0.10.0"
+        ) from e
+
+    target_modules = collect_lora_target_suffixes(model, include_vision=args.lora_on_vision)
+    modules_to_save = build_modules_to_save(model)
+    print(f"LoRA target_modules (suffix match): {target_modules}")
+    print(f"modules_to_save (new tokens / embeddings): {modules_to_save}")
+
+    lora_config = LoraConfig(
+        task_type=TaskType.CAUSAL_LM,
+        r=args.lora_r,
+        lora_alpha=args.lora_alpha,
+        lora_dropout=args.lora_dropout,
+        target_modules=target_modules,
+        bias="none",
+        modules_to_save=modules_to_save,
+    )
+    model = get_peft_model(model, lora_config)
+    model.print_trainable_parameters()
+    return model
+
+
 def main():
     args = parse_args()
     set_seed(args.seed)
 
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
-    print(f"Loading base model from {mask_path(args.model_path)} ...")
+
+    print(f"Loading base model from {args.model_path} ...")
     try:
         from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
         model_cls = Qwen2_5_VLForConditionalGeneration
@@ -287,8 +399,15 @@ def main():
     print(f"Added WEAVE tokens: {num_added}")
     model.resize_token_embeddings(len(tokenizer))
     processor.tokenizer = tokenizer
+
+    use_lora = not args.full_finetune
+    if use_lora:
+        model = apply_lora_weavegen(model, args)
+    else:
+        print("Full fine-tuning: all parameters trainable.")
+
     data_list = load_training_data(args.training_data)
-    print(f"Loaded {len(data_list)} samples from {mask_path(args.training_data)}")
+    print(f"Loaded {len(data_list)} samples from {args.training_data}")
 
     dataset = WeaveUtilDataset(
         data_list=data_list,
@@ -297,6 +416,7 @@ def main():
         num_weave=args.num_weave_tokens,
         max_length=args.max_length,
     )
+
     from torch.utils.data import DataLoader
     dataloader = DataLoader(
         dataset,
@@ -305,7 +425,9 @@ def main():
         collate_fn=collate_fn_with_padding,
         num_workers=0,
     )
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
+
+    trainable = [p for p in model.parameters() if p.requires_grad]
+    optimizer = torch.optim.AdamW(trainable, lr=args.lr)
     total_steps = len(dataloader) * args.epochs
     warmup_steps = int(total_steps * args.warmup_ratio)
 
@@ -338,18 +460,41 @@ def main():
             outputs = model(**batch)
             loss = outputs.loss
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            torch.nn.utils.clip_grad_norm_(trainable, 1.0)
             optimizer.step()
             scheduler.step()
             global_step += 1
             epoch_loss += loss.item()
             pbar.set_postfix(loss=loss.item())
         print(f"Epoch {epoch+1} avg loss: {epoch_loss / len(dataloader):.4f}")
-    model.save_pretrained(args.output_dir)
+
+    if use_lora and args.merge_lora_before_save:
+        print("Merging LoRA into base weights before save ...")
+        model = model.merge_and_unload()
+        model.save_pretrained(args.output_dir)
+    else:
+        model.save_pretrained(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
     if hasattr(processor, "save_pretrained"):
         processor.save_pretrained(args.output_dir)
-    print(f"WEAVEGen saved to {mask_path(args.output_dir)}")
+
+    if use_lora and not args.merge_lora_before_save:
+        meta = {
+            "base_model_path": os.path.abspath(args.model_path),
+            "finetune": "lora",
+            "lora_r": args.lora_r,
+            "lora_alpha": args.lora_alpha,
+            "lora_dropout": args.lora_dropout,
+            "lora_on_vision": args.lora_on_vision,
+        }
+        meta_path = os.path.join(args.output_dir, "weave_lora_meta.json")
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2, ensure_ascii=False)
+        print(
+            f"Saved LoRA adapter to {args.output_dir}. "
+            f"Evaluate with the same base model path (see weave_lora_meta.json or eval_weave.py --base_model_path)."
+        )
+    print(f"WEAVEGen saved to {args.output_dir}")
 
 
 def collate_fn_with_padding(batch: List[Dict]) -> Dict[str, torch.Tensor]:

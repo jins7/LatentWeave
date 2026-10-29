@@ -224,3 +224,4 @@ PROPOSED SOLUTION:
         raise ValueError(f"Unknown verifier name: {vera_name}. Available: {list(vera_names_to_prompts.keys())}")
     
     return vera_names_to_prompts[vera_name]
+

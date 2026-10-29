@@ -73,3 +73,4 @@ def is_answer_correct(generated_answer: str, ground_truth: str, has_options: boo
         if min_len > 0 and len(extracted_clean) >= min_len * 0.5 and len(ground_truth_clean) >= min_len * 0.5:
             return True
     return False
+

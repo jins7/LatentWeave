@@ -517,3 +517,4 @@ def collate_fn_with_padding(batch: List[Dict]) -> Dict[str, torch.Tensor]:
 
 if __name__ == "__main__":
     main()
+

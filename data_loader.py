@@ -212,4 +212,3 @@ def load_mathvision_dataset(
         raise
     print(f"\nMathVision: {len(all_data)} (MCQ {mcq_count}, open {open_ended_count})")
     return all_data
-

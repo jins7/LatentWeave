@@ -276,4 +276,3 @@ class VLRewardModel(object):
 
 MMMURewardModel = VLRewardModel
 
-

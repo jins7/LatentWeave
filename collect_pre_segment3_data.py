@@ -203,4 +203,3 @@ if __name__ == '__main__':
     parser.add_argument('--data_path', type=str, required=True, help='Path to training data JSON')
     args = parser.parse_args()
     validate_training_data(args.data_path)
-

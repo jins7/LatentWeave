@@ -580,4 +580,3 @@ def optimize_all_segments(
     ))
     return third_optimized_answer, all_reward_histories, total_optimized_length, segment_results, second_all_hidden_states
 
-

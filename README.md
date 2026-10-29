@@ -42,7 +42,3 @@ python eval_weave.py \
   --start_idx 0 \
   --end_idx 300
 ```
-
-## ✨ Acknowledgement
-- Thanks to [Qwen](https://github.com/QwenLM/Qwen3-VL) for standard evaluation.
-
